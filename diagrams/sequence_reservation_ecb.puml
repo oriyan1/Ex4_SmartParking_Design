@@ -1,0 +1,93 @@
+@startuml
+' Exercise 4 - Part 4 AI Design Critique, revised Sequence Diagram 1
+' Improvements: explicit expected version read and automatic no-show revocation
+' Note: tryReserve(expectedVersion) must atomically check version/status and update both.
+
+actor Student
+actor "Reservation Timer" as Timer
+boundary ":StudentDashboardUI" as UI
+control ":ReservationControl" as Ctrl
+entity "spot : ParkingSpot" as Spot
+entity "res : Reservation" as Res
+entity "owner : User" as Owner
+boundary ":LprGateBoundary" as LPR
+
+Student -> UI : onReserveSpotClicked("EV-04", "12-345-67")
+activate UI
+UI -> Ctrl : reserveSpot(userId, "EV-04", "12-345-67")
+activate Ctrl
+Ctrl -> Spot : isAvailable()
+activate Spot
+Spot --> Ctrl : available
+deactivate Spot
+
+alt available == true
+  Ctrl -> Spot : getVersion()
+  activate Spot
+  Spot --> Ctrl : expectedVersion
+  deactivate Spot
+
+  Ctrl -> Spot : tryReserve(expectedVersion)
+  activate Spot
+  Spot --> Ctrl : acquired
+  deactivate Spot
+
+  alt acquired == true
+    create Res
+    Ctrl -> Res : <<create>>
+    Ctrl --> UI : res
+    UI -> UI : displayCountdown(15)
+  else acquired == false (concurrent race)
+    Ctrl --> UI : null
+    UI -> UI : showErrorAlert("Spot just reserved by another user")
+  end
+else available == false
+  Ctrl --> UI : null
+  UI -> UI : showErrorAlert("Spot unavailable")
+end
+
+deactivate Ctrl
+deactivate UI
+
+== After a Successful Reservation ==
+opt reservation was successfully created
+  alt LPR entry detected within 15 minutes
+    LPR -> Ctrl : processLprGateEntry("12-345-67", "EV Zone")
+    activate Ctrl
+    Ctrl -> Res : isWithin15MinWindow()
+    activate Res
+    Res --> Ctrl : true
+    deactivate Res
+    Ctrl -> Res : setStatus(FULFILLED)
+    activate Res
+    deactivate Res
+    Ctrl -> LPR : openBarrierGate()
+    deactivate Ctrl
+  else 15 minutes elapsed without LPR entry
+    Timer -> Ctrl : revokeExpiredReservations()
+    activate Ctrl
+    Ctrl -> Res : isWithin15MinWindow()
+    activate Res
+    Res --> Ctrl : false
+    deactivate Res
+    Ctrl -> Res : setStatus(NO_SHOW_REVOKED)
+    activate Res
+    deactivate Res
+    Ctrl -> Spot : setStatus(AVAILABLE)
+    activate Spot
+    deactivate Spot
+    Ctrl -> Owner : incrementNoShowWarnings()
+    activate Owner
+    deactivate Owner
+    destroy Res
+    deactivate Ctrl
+
+    opt vehicle arrives after revocation
+      LPR -> Ctrl : processLprGateEntry("12-345-67", "EV Zone")
+      activate Ctrl
+      Ctrl -> LPR : denyEntry()
+      deactivate Ctrl
+    end
+  end
+end
+@enduml
